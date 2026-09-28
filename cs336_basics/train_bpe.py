@@ -13,57 +13,72 @@ class BpeTokenizer:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
     def __init__(self):
-        self.vocab: dict[int, bytes] = {i: bytes(i) for i in range(256)}
-        self.reverse_vocab = {v: k for k, v in self.vocab.items()}
-        self.merges: list[tuple[bytes, bytes]] = []
+        self.vocab: dict[int, bytes] = dict()
+        self.merges: list[tuple[bytes, bytes]] = list()
 
-        self._pre_token_counts: dict[bytes, int] = dict()
-        self._tokenized_text: TokenizedText = TokenizedText([])
+        self._pre_token_counts: dict[tuple[TokenId, ...], int] = dict()
         self._pair_counts: dict[tuple[TokenId, TokenId], int] = dict()
 
-    def train(self, input_path: str, max_vocab_size: int):
-        logger.info("Reading training data")
-        with open(input_path, "r", encoding="utf-8") as file:
-            text = file.read()
-            # Pre-tokenize
-            logger.info("Updating pre-token counts")
-            self._update_pre_token_counts(text)
+    def train(self, text: str, max_vocab_size: int, special_tokens: list[str]):
+        # Initialize vocab
+        self.vocab = {
+            i: tok
+            for i, tok in enumerate(
+                [bytes([i]) for i in range(256)]
+                + [tok.encode("utf-8") for tok in special_tokens]
+            )
+        }
+        self.merges: list[tuple[bytes, bytes]] = []
 
-            # Initialize structures
-            text_utf8 = text.encode("utf-8")
-            logger.info("Initial text tokenization")
-            tokens = self._initial_tokenize_text(text_utf8)
-            self._tokenized_text = TokenizedText(tokens)
-            logger.info("Initial pair counts")
-            self._pair_counts = self._initial_pair_counts(tokens)
+        # Pre-tokenize
+        logger.info("Pre-tokenizing")
+        self._update_pre_token_counts(text, special_tokens)
 
-            while len(self._tokenized_text) > 1 and len(self.vocab) < max_vocab_size:
-                # Step: find most common token pair
-                best_pair = self._step_most_frequent_pair()
-                # Step: add pair to vocabulary
-                self._step_add_pair_to_vocab(best_pair)
+        # Initialize structures
+        logger.info("Initial pair counts")
+        self._pair_counts = self._initial_pair_counts(self._pre_token_counts)
 
-    def _update_pre_token_counts(self, text: str):
-        self._pre_token_counts = self._get_chunk_pre_token_counts(text)
+        while len(self._pair_counts) > 0 and len(self.vocab) < max_vocab_size:
+            # Step: find most common token pair
+            best_pair = self._step_most_frequent_pair()
+            # Step: add pair to vocabulary
+            self._step_add_pair_to_vocab(best_pair)
 
-    def _get_chunk_pre_token_counts(self, text: str) -> dict[bytes, int]:
+    def _update_pre_token_counts(self, text: str, special_tokens: list[str]):
+        self._pre_token_counts = self._get_chunk_pre_token_counts(text, special_tokens)
+
+    def _get_chunk_pre_token_counts(
+        self, text: str, special_tokens: list[str]
+    ) -> dict[tuple[TokenId, ...], int]:
         counts = dict()
-        for match in re.finditer(self.PAT, text):
-            match_text: str = match.group(0)
-            match_text_utf8 = match_text.encode("utf-8")
-            counts[match_text_utf8] = counts.get(match_text_utf8, 0) + 1
-        return counts
+        for subdoc in re.split(
+            "|".join([re.escape(stok, special_only=False) for stok in special_tokens]),
+            text,
+        ):
+            for match in re.finditer(self.PAT, subdoc):
+                match_text: str = match.group(0)
+                match_text_utf8 = match_text.encode("utf-8")
+                counts[match_text_utf8] = counts.get(match_text_utf8, 0) + 1
+
+        return {
+            tuple(self._initial_tokenize_text(pretok)): count
+            for pretok, count in counts.items()
+        }
 
     def _initial_tokenize_text(self, text_utf8: bytes) -> list[TokenId]:
-        return [self.reverse_vocab[bytes(c)] for c in text_utf8]
+        return [c for c in text_utf8]
 
     def _initial_pair_counts(
-        self, tokenized_text: list[TokenId]
+        self, pretoken_counts: dict[tuple[TokenId, ...], int]
     ) -> dict[tuple[TokenId, TokenId], int]:
         pair_counts = dict()
-        for i in range(len(tokenized_text) - 1):
-            pair = tokenized_text[i], tokenized_text[i + 1]
-            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+        for pretok, count in pretoken_counts.items():
+            pretok_pair_counts = dict()
+            for i in range(len(pretok) - 1):
+                pair = pretok[i], pretok[i + 1]
+                pretok_pair_counts[pair] = pretok_pair_counts.get(pair, 0) + 1
+            for pair, pair_count in pretok_pair_counts.items():
+                pair_counts[pair] = pair_counts.get(pair, 0) + pair_count * count
         return pair_counts
 
     def _step_most_frequent_pair(self) -> tuple[TokenId, TokenId]:
@@ -87,47 +102,56 @@ class BpeTokenizer:
         new_tok = self.vocab[pair[0]] + self.vocab[pair[1]]
         new_tok_id = len(self.vocab)
         self.vocab[new_tok_id] = new_tok
-        self.reverse_vocab[new_tok] = new_tok_id
 
         # Update tokenized text and pair counts
-        logger.info(
-            f"Replacing token {new_tok} in text of length {len(self._tokenized_text)}"
+        logger.debug(
+            f"Replacing token {new_tok} in {len(self._pre_token_counts)} pre-tokens"
         )
-        i = TextCoords(0, 0)
 
-        while self._tokenized_text._has_next_coord(i):
-            next_i = self._tokenized_text._next_coord(i)
-            if (
-                self._tokenized_text._get(i) == pair[0]
-                and self._tokenized_text._get(next_i) == pair[1]
-            ):
-                # logger.info(f"Replacing token {new_tok} at {i}")
-                if self._tokenized_text._has_prev_coord(i):
-                    prev_i = self._tokenized_text._prev_coord(i)
-                    old_pair = self._tokenized_text._get(prev_i), pair[0]
-                    new_pair = self._tokenized_text._get(prev_i), new_tok_id
+        changes = []
 
-                    self._pair_counts[old_pair] = max(
-                        self._pair_counts.get(old_pair, 0) - 1, 0
-                    )
-                    self._pair_counts[new_pair] = self._pair_counts.get(new_pair, 0) + 1
+        for old_pretok, pretok_count in self._pre_token_counts.items():
+            pretok = list(old_pretok)
+            i = 0
+            while i < len(pretok) - 1:
+                next_i = i + 1
+                if pretok[i] == pair[0] and pretok[next_i] == pair[1]:
+                    if i > 0:
+                        prev_i = i - 1
+                        old_pair = pretok[prev_i], pair[0]
+                        new_pair = pretok[prev_i], new_tok_id
 
-                if self._tokenized_text._has_next_coord(next_i):
-                    next_next_i = self._tokenized_text._next_coord(next_i)
-                    old_pair = pair[1], self._tokenized_text._get(next_next_i)
-                    new_pair = new_tok_id, self._tokenized_text._get(next_next_i)
-                    self._pair_counts[old_pair] = max(
-                        self._pair_counts.get(old_pair, 0) - 1, 0
-                    )
-                    self._pair_counts[new_pair] = self._pair_counts.get(new_pair, 0) + 1
+                        self._pair_counts[old_pair] = max(
+                            self._pair_counts.get(old_pair, 0) - pretok_count, 0
+                        )
+                        self._pair_counts[new_pair] = (
+                            self._pair_counts.get(new_pair, 0) + pretok_count
+                        )
 
-                self._tokenized_text._pop(next_i)
-                self._tokenized_text._pop(i)
-                self._tokenized_text._insert(i, new_tok_id)
+                    if i < len(pretok) - 2:
+                        next_next_i = i + 2
+                        old_pair = pair[1], pretok[next_next_i]
+                        new_pair = new_tok_id, pretok[next_next_i]
 
-            i = self._tokenized_text._next_coord(i)
+                        self._pair_counts[old_pair] = max(
+                            self._pair_counts.get(old_pair, 0) - pretok_count, 0
+                        )
+                        self._pair_counts[new_pair] = (
+                            self._pair_counts.get(new_pair, 0) + pretok_count
+                        )
+
+                    pretok.pop(next_i)
+                    pretok.pop(i)
+                    pretok.insert(i, new_tok_id)
+
+                i += 1
+            changes.append((old_pretok, tuple(pretok)))
 
         self._pair_counts.pop(pair)
+
+        for old_pretok, new_pretok in changes:
+            count = self._pre_token_counts.pop(old_pretok)
+            self._pre_token_counts[new_pretok] = count
 
 
 def compare_tok_pair(
@@ -150,7 +174,9 @@ def test_entrypoint():
     logging.basicConfig(level=logging.INFO)
     tokenizer = BpeTokenizer()
 
-    tokenizer.train("data/TinyStoriesV2-GPT4-valid.txt", 2000)
+    with open("data/TinyStoriesV2-GPT4-valid.txt", "r", encoding="utf-8") as file:
+        text = file.read()
+        tokenizer.train(text, 2000, ["<|endoftext|>"])
 
     pprint.pprint(tokenizer.vocab)
     pprint.pprint(tokenizer.merges)
