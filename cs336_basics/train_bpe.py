@@ -8,6 +8,7 @@ import regex as re
 
 logger = logging.getLogger(__name__)
 
+
 class BpeTokenizer:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -31,7 +32,7 @@ class BpeTokenizer:
             # Initialize structures
             text_utf8 = text.encode("utf-8")
             logger.info("Initial text tokenization")
-            tokens = self._tokenize_text(text_utf8)
+            tokens = self._initial_tokenize_text(text_utf8)
             self._tokenized_text = TokenizedText(tokens)
             logger.info("Initial pair counts")
             self._pair_counts = self._initial_pair_counts(tokens)
@@ -53,7 +54,7 @@ class BpeTokenizer:
             counts[match_text_utf8] = counts.get(match_text_utf8, 0) + 1
         return counts
 
-    def _tokenize_text(self, text_utf8: bytes) -> list[TokenId]:
+    def _initial_tokenize_text(self, text_utf8: bytes) -> list[TokenId]:
         return [self.reverse_vocab[bytes(c)] for c in text_utf8]
 
     def _initial_pair_counts(
@@ -93,6 +94,7 @@ class BpeTokenizer:
             f"Replacing token {new_tok} in text of length {len(self._tokenized_text)}"
         )
         i = TextCoords(0, 0)
+
         while self._tokenized_text._has_next_coord(i):
             next_i = self._tokenized_text._next_coord(i)
             if (
@@ -125,7 +127,7 @@ class BpeTokenizer:
 
             i = self._tokenized_text._next_coord(i)
 
-        # Update token pair counts
+        self._pair_counts.pop(pair)
 
 
 def compare_tok_pair(
