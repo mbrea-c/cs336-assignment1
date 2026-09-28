@@ -88,7 +88,10 @@ class BpeTokenizer:
         for pair, freq in self._pair_counts.items():
             if freq > best_freq or (
                 freq == best_freq
-                and (best_pair is None or compare_tok_pair(pair, best_pair) > 0)
+                and (
+                    best_pair is None
+                    or compare_tok_pair(pair, best_pair, self.vocab) > 0
+                )
             ):
                 best_pair = pair
                 best_freq = freq
@@ -155,16 +158,20 @@ class BpeTokenizer:
 
 
 def compare_tok_pair(
-    left: tuple[TokenId, TokenId], right: tuple[TokenId, TokenId]
+    left: tuple[TokenId, TokenId],
+    right: tuple[TokenId, TokenId],
+    vocab: dict[TokenId, bytes],
 ) -> int:
-    if left[0] > right[0]:
+    l = (vocab[left[0]], vocab[left[1]])
+    r = (vocab[right[0]], vocab[right[1]])
+    if l[0] > r[0]:
         return 1
-    elif left[0] < right[0]:
+    elif l[0] < r[0]:
         return -1
     else:
-        if left[1] > right[1]:
+        if l[1] > r[1]:
             return 1
-        elif left[1] < right[1]:
+        elif l[1] < r[1]:
             return -1
         else:
             return 0
