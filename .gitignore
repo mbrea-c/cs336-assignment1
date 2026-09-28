@@ -161,3 +161,14 @@ cython_debug/
 
 .ruff_cache/
 *.zip
+
+# Nix / direnv
+/.direnv
+/result
+
+# Datasets
+/data
+
+# artifacts
+/writeup.pdf
+/*profile.svg
