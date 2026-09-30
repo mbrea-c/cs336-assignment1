@@ -1,5 +1,6 @@
 from __future__ import annotations
-from cs336_basics.train_bpe import BpeTokenizer
+from pathlib import Path
+from cs336_basics.train_bpe import BpeTokenizerTrainer
 
 import os
 from collections.abc import Iterable
@@ -592,10 +593,8 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    tokenizer = BpeTokenizer()
+    tokenizer = BpeTokenizerTrainer()
 
-    with open(input_path, "r", encoding="utf-8") as file:
-        text = file.read()
-        tokenizer.train(text, vocab_size, special_tokens)
+    tokenizer.train(Path(input_path), vocab_size, special_tokens)
 
     return tokenizer.vocab, tokenizer.merges

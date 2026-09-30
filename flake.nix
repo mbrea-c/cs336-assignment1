@@ -254,6 +254,8 @@
             pkgs.git
             pkgs.py-spy
             pkgs.uv
+            pkgs.psrecord
+            pkgs.time
           ];
 
           env = {

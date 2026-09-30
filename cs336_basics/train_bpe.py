@@ -1,3 +1,11 @@
+import base64
+import cattrs
+import json
+from dataclasses import dataclass
+from typing import BinaryIO
+import os
+from multiprocessing.pool import Pool
+from pathlib import Path
 from cs336_basics.domain import TokenId
 from cs336_basics.text import TokenizedText, TextCoords
 from collections import deque
@@ -9,7 +17,21 @@ import regex as re
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class PreTokenizerChunkInput:
+    path: Path
+    start: int
+    end: int
+    special_tokens: list[str]
+
+
+@dataclass
 class BpeTokenizer:
+    vocab: dict[int, bytes]
+    merges: list[tuple[bytes, bytes]]
+
+
+class BpeTokenizerTrainer:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
     def __init__(self):
@@ -19,7 +41,9 @@ class BpeTokenizer:
         self._pre_token_counts: dict[tuple[TokenId, ...], int] = dict()
         self._pair_counts: dict[tuple[TokenId, TokenId], int] = dict()
 
-    def train(self, text: str, max_vocab_size: int, special_tokens: list[str]):
+    def train(
+        self, path: Path, max_vocab_size: int, special_tokens: list[str]
+    ) -> BpeTokenizer:
         # Initialize vocab
         self.vocab = {
             i: tok
@@ -32,38 +56,93 @@ class BpeTokenizer:
 
         # Pre-tokenize
         logger.info("Pre-tokenizing")
-        self._update_pre_token_counts(text, special_tokens)
+        self._update_pre_token_counts(path, special_tokens)
 
         # Initialize structures
         logger.info("Initial pair counts")
         self._pair_counts = self._initial_pair_counts(self._pre_token_counts)
 
+        logger.info("Entering main loop")
         while len(self._pair_counts) > 0 and len(self.vocab) < max_vocab_size:
             # Step: find most common token pair
             best_pair = self._step_most_frequent_pair()
             # Step: add pair to vocabulary
             self._step_add_pair_to_vocab(best_pair)
 
-    def _update_pre_token_counts(self, text: str, special_tokens: list[str]):
-        self._pre_token_counts = self._get_chunk_pre_token_counts(text, special_tokens)
+        return BpeTokenizer(self.vocab, self.merges)
 
+    def _update_pre_token_counts(self, path: Path, special_tokens: list[str]):
+        boundaries = BpeTokenizerTrainer._find_chunk_boundaries(
+            path, 2**21, b"<|endoftext|>"
+        )
+        inputs = map(
+            lambda bounds: PreTokenizerChunkInput(
+                path, bounds[0], bounds[1], special_tokens
+            ),
+            zip(boundaries[:-1], boundaries[1:]),
+        )
+        pool = Pool()
+        result = pool.map(BpeTokenizerTrainer._get_chunk_pre_token_counts, inputs)
+
+        total = dict()
+
+        for chunk_counts in result:
+            for pretok, count in chunk_counts.items():
+                total[pretok] = total.get(pretok, 0) + count
+        self._pre_token_counts = total
+
+    @staticmethod
+    def _find_chunk_boundaries(
+        path: Path, min_chunk_size: int, delimiter: bytes
+    ) -> list[int]:
+        boundaries = [0]
+        curr_offset = 0
+        mini_chunk_size = 4096
+
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            f.seek(0)
+
+            while True:
+                while True:
+                    f.seek(max(0, curr_offset))
+                    mini_chunk = f.read(mini_chunk_size)
+                    curr_offset
+
+                    # If EOF, this boundary should be at the end of the file
+                    if mini_chunk == b"":
+                        boundaries.append(file_size)
+                        return boundaries
+
+                    found_at = mini_chunk.find(delimiter)
+                    if found_at != -1:
+                        boundaries.append(curr_offset + found_at)
+                        break
+                    curr_offset += mini_chunk_size
+                curr_offset += min_chunk_size
+
+    @staticmethod
     def _get_chunk_pre_token_counts(
-        self, text: str, special_tokens: list[str]
+        input: PreTokenizerChunkInput,
     ) -> dict[tuple[TokenId, ...], int]:
+        path = input.path
+        boundaries = (input.start, input.end)
+        special_tokens = input.special_tokens
+        with open(path, "rb") as file:
+            file.seek(boundaries[0])
+            text = file.read(boundaries[1] - boundaries[0]).decode("utf-8")
         counts = dict()
         for subdoc in re.split(
             "|".join([re.escape(stok, special_only=False) for stok in special_tokens]),
             text,
         ):
-            for match in re.finditer(self.PAT, subdoc):
+            for match in re.finditer(BpeTokenizerTrainer.PAT, subdoc):
                 match_text: str = match.group(0)
                 match_text_utf8 = match_text.encode("utf-8")
                 counts[match_text_utf8] = counts.get(match_text_utf8, 0) + 1
 
-        return {
-            tuple(self._initial_tokenize_text(pretok)): count
-            for pretok, count in counts.items()
-        }
+        return {tuple(c for c in pretok): count for pretok, count in counts.items()}
 
     def _initial_tokenize_text(self, text_utf8: bytes) -> list[TokenId]:
         return [c for c in text_utf8]
@@ -177,13 +256,40 @@ def compare_tok_pair(
             return 0
 
 
+def byte_encoder(val: bytes) -> str:
+    try:
+        val.decode("utf-8")
+        return (b"utf8:" + val).decode("utf-8")
+    except:
+        return (b"b64:" + base64.b64encode(val)).decode("ascii")
+
+
+def byte_decoder(val: str) -> bytes:
+    if val.startswith("utf8:"):
+        trimmed = val.removeprefix("utf8:")
+        return trimmed.encode("utf-8")
+    elif val.startswith("b64:"):
+        trimmed = val.removeprefix("b64:")
+        return base64.b64decode(trimmed)
+    else:
+        raise ValueError("`bytes` encoding not recognized")
+
+
 def test_entrypoint():
     logging.basicConfig(level=logging.INFO)
-    tokenizer = BpeTokenizer()
+    tokenizer_trainer = BpeTokenizerTrainer()
 
-    with open("data/TinyStoriesV2-GPT4-valid.txt", "r", encoding="utf-8") as file:
-        text = file.read()
-        tokenizer.train(text, 2000, ["<|endoftext|>"])
+    file_path = Path("data/TinyStoriesV2-GPT4-train.txt")
 
-    pprint.pprint(tokenizer.vocab)
-    pprint.pprint(tokenizer.merges)
+    tokenizer = tokenizer_trainer.train(file_path, 10000, ["<|endoftext|>"])
+
+    converter = cattrs.Converter()
+    converter.register_unstructure_hook(bytes, byte_encoder)
+    converter.register_structure_hook(bytes, lambda val, _: byte_decoder(val))
+
+    save_path = f"tokenizers/{file_path.name}.json"
+
+    with open(save_path, "w") as f:
+        json.dump(converter.unstructure(tokenizer), f)
+
+    logger.info(f"Saved tokenizer file at {save_path}")

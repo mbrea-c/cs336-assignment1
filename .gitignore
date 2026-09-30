@@ -172,3 +172,9 @@ cython_debug/
 # artifacts
 /writeup.pdf
 /*profile.svg
+/usage.txt
+/usage.png
+/summary.txt
+
+# Will only commit this once 100% finished
+/tokenizers
