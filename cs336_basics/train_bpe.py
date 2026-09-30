@@ -193,15 +193,15 @@ class BpeTokenizerTrainer:
         changes = []
 
         for old_pretok, pretok_count in self._pre_token_counts.items():
-            pretok = list(old_pretok)
+            pretok_joins = None
             i = 0
-            while i < len(pretok) - 1:
+            while i < len(old_pretok) - 1:
                 next_i = i + 1
-                if pretok[i] == pair[0] and pretok[next_i] == pair[1]:
+                if old_pretok[i] == pair[0] and old_pretok[next_i] == pair[1]:
                     if i > 0:
                         prev_i = i - 1
-                        old_pair = pretok[prev_i], pair[0]
-                        new_pair = pretok[prev_i], new_tok_id
+                        old_pair = old_pretok[prev_i], pair[0]
+                        new_pair = old_pretok[prev_i], new_tok_id
 
                         self._pair_counts[old_pair] = max(
                             self._pair_counts.get(old_pair, 0) - pretok_count, 0
@@ -210,10 +210,10 @@ class BpeTokenizerTrainer:
                             self._pair_counts.get(new_pair, 0) + pretok_count
                         )
 
-                    if i < len(pretok) - 2:
+                    if i < len(old_pretok) - 2:
                         next_next_i = i + 2
-                        old_pair = pair[1], pretok[next_next_i]
-                        new_pair = new_tok_id, pretok[next_next_i]
+                        old_pair = pair[1], old_pretok[next_next_i]
+                        new_pair = new_tok_id, old_pretok[next_next_i]
 
                         self._pair_counts[old_pair] = max(
                             self._pair_counts.get(old_pair, 0) - pretok_count, 0
@@ -222,12 +222,25 @@ class BpeTokenizerTrainer:
                             self._pair_counts.get(new_pair, 0) + pretok_count
                         )
 
-                    pretok.pop(next_i)
-                    pretok.pop(i)
-                    pretok.insert(i, new_tok_id)
+                    if pretok_joins is None:
+                        pretok_joins = deque()
+                    pretok_joins.append(i)
 
-                i += 1
-            changes.append((old_pretok, tuple(pretok)))
+                    i += 2
+                else:
+                    i += 1
+            if pretok_joins is not None:
+                pretok = list()
+                i = 0
+                while i < len(old_pretok):
+                    if len(pretok_joins) > 0 and i == pretok_joins[0]:
+                        pretok.append(new_tok_id)
+                        pretok_joins.popleft()
+                        i += 2
+                    else:
+                        pretok.append(old_pretok[i])
+                        i += 1
+                changes.append((old_pretok, tuple(pretok)))
 
         self._pair_counts.pop(pair)
 
