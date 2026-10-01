@@ -81,8 +81,9 @@ class BpeTokenizerTrainer:
             ),
             zip(boundaries[:-1], boundaries[1:]),
         )
-        pool = Pool()
-        result = pool.map(BpeTokenizerTrainer._get_chunk_pre_token_counts, inputs)
+
+        with Pool() as pool:
+            result = pool.map(BpeTokenizerTrainer._get_chunk_pre_token_counts, inputs)
 
         total = dict()
 
@@ -292,9 +293,11 @@ def test_entrypoint():
     logging.basicConfig(level=logging.INFO)
     tokenizer_trainer = BpeTokenizerTrainer()
 
-    file_path = Path("data/TinyStoriesV2-GPT4-train.txt")
+    # file_path = Path("data/TinyStoriesV2-GPT4-train.txt")
+    # tokenizer = tokenizer_trainer.train(file_path, 10000, ["<|endoftext|>"])
 
-    tokenizer = tokenizer_trainer.train(file_path, 10000, ["<|endoftext|>"])
+    file_path = Path("data/owt_train.txt")
+    tokenizer = tokenizer_trainer.train(file_path, 32000, ["<|endoftext|>"])
 
     converter = cattrs.Converter()
     converter.register_unstructure_hook(bytes, byte_encoder)
