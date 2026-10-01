@@ -1,3 +1,7 @@
+import signal
+from contextlib import contextmanager
+from cattr.gen import make_dict_structure_fn, override, make_dict_unstructure_fn
+import hashlib
 import base64
 import cattrs
 import json
@@ -31,66 +35,207 @@ class BpeTokenizer:
     merges: list[tuple[bytes, bytes]]
 
 
+@dataclass
+class BpeHyperparameters:
+    max_vocab_size: int
+    special_tokens: list[str]
+    chunk_delimiter: bytes
+
+
+@dataclass
+class BpeCheckpointParams:
+    vocab: dict[int, bytes]
+    merges: list[tuple[bytes, bytes]]
+    pretoken_counts: dict[tuple[TokenId, ...], int]
+
+
+@dataclass
+class BpeCheckpoint:
+    data_sha256_digest: str
+    hyper_params: BpeHyperparameters
+    params: BpeCheckpointParams | None
+
+
 class BpeTokenizerTrainer:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
-    def __init__(self):
-        self.vocab: dict[int, bytes] = dict()
-        self.merges: list[tuple[bytes, bytes]] = list()
+    def __init__(
+        self,
+        data_path: Path,
+        checkpoint_path: Path | None,
+        hyper_params: BpeHyperparameters,
+    ):
+        self._converter = cattrs.Converter()
 
-        self._pre_token_counts: dict[tuple[TokenId, ...], int] = dict()
+        self._converter.register_unstructure_hook(bytes, unstructure_bytes)
+        self._converter.register_structure_hook(
+            bytes, lambda val, _: structure_bytes(val)
+        )
+        self._converter.register_structure_hook(
+            BpeCheckpointParams,
+            make_dict_structure_fn(
+                BpeCheckpointParams,
+                self._converter,
+                pretoken_counts=override(struct_hook=structure_pretok_counts),
+            ),
+        )
+        self._converter.register_unstructure_hook(
+            BpeCheckpointParams,
+            make_dict_unstructure_fn(
+                BpeCheckpointParams,
+                self._converter,
+                pretoken_counts=override(unstruct_hook=unstructure_pretok_counts),
+            ),
+        )
+
+        self._checkpoint_path = checkpoint_path
+        self._data_path = data_path
+        try:
+            self._checkpoint = BpeTokenizerTrainer._load_checkpoint(
+                data_path, checkpoint_path, hyper_params, self._converter
+            )
+        except:
+            self._checkpoint = BpeTokenizerTrainer._init_checkpoint(
+                data_path, hyper_params
+            )
+
         self._pair_counts: dict[tuple[TokenId, TokenId], int] = dict()
 
-    def train(
-        self, path: Path, max_vocab_size: int, special_tokens: list[str]
-    ) -> BpeTokenizer:
-        # Initialize vocab
-        self.vocab = {
-            i: tok
-            for i, tok in enumerate(
-                [bytes([i]) for i in range(256)]
-                + [tok.encode("utf-8") for tok in special_tokens]
-            )
-        }
-        self.merges: list[tuple[bytes, bytes]] = []
+    @staticmethod
+    def _load_checkpoint(
+        data_path: Path,
+        checkpoint_path: Path | None,
+        hyper_params: BpeHyperparameters,
+        converter: cattrs.Converter,
+    ) -> BpeCheckpoint:
+        if checkpoint_path is None:
+            raise RuntimeError("Checkpointing disabled")
 
-        # Pre-tokenize
-        logger.info("Pre-tokenizing")
-        self._update_pre_token_counts(path, special_tokens)
+        with open(checkpoint_path, "r") as checkpoint_file:
+            ck = converter.structure(json.load(checkpoint_file), BpeCheckpoint)
+        with open(data_path, "rb") as data_file:
+            digest = hashlib.file_digest(data_file, "sha256").hexdigest()
+        if digest != ck.data_sha256_digest:
+            raise ValueError("Could not match digest")
+        if hyper_params != ck.hyper_params:
+            raise ValueError("Could not hyper parameters")
+        return ck
+
+    @staticmethod
+    def _init_checkpoint(
+        data_path: Path, hyper_params: BpeHyperparameters
+    ) -> BpeCheckpoint:
+        with open(data_path, "rb") as data_file:
+            digest = hashlib.file_digest(data_file, "sha256").hexdigest()
+        return BpeCheckpoint(
+            data_sha256_digest=digest, hyper_params=hyper_params, params=None
+        )
+
+    def train(self):
+        if self._checkpoint.params is None:
+            logger.info("Initializing checkpoint parameters")
+            self._init_ck_params()
 
         # Initialize structures
         logger.info("Initial pair counts")
-        self._pair_counts = self._initial_pair_counts(self._pre_token_counts)
+        self._pair_counts = BpeTokenizerTrainer._initial_pair_counts(
+            self._ck_params().pretoken_counts
+        )
 
         logger.info("Entering main loop")
-        while len(self._pair_counts) > 0 and len(self.vocab) < max_vocab_size:
+        while (
+            len(self._pair_counts) > 0
+            and len(self._ck_params().vocab)
+            < self._checkpoint.hyper_params.max_vocab_size
+        ):
+            if len(self._ck_params().merges) % 25 == 0:
+                logger.info(
+                    f"Completed {len(self._ck_params().merges)} merges. "
+                    + f"Current vocab size is {len(self._ck_params().vocab)}. "
+                    + f"Longest token in vocab is {max(self._ck_params().vocab.values(), key=lambda bts: len(bts))}"
+                )
+            if (
+                self._checkpoint_path is not None
+                and len(self._ck_params().merges) % 100 == 0
+            ):
+                logger.info(f"Saving checkpoint at {self._checkpoint_path}...")
+                with delay_keyboard_interrupt():
+                    self._save_checkpoint_atomic()
+                logger.info(f"Checkpoint saved")
             # Step: find most common token pair
             best_pair = self._step_most_frequent_pair()
             # Step: add pair to vocabulary
             self._step_add_pair_to_vocab(best_pair)
 
-        return BpeTokenizer(self.vocab, self.merges)
+        logger.info("Finished training. Saving final checkpoint...")
+        with delay_keyboard_interrupt():
+            self._save_checkpoint_atomic()
+        logger.info("Done")
 
-    def _update_pre_token_counts(self, path: Path, special_tokens: list[str]):
+    def _save_checkpoint_atomic(self):
+        if self._checkpoint_path is None:
+            return
+
+        tmp_path = self._checkpoint_path.with_name(self._checkpoint_path.name + ".tmp")
+        with open(tmp_path, "w") as checkpoint_file:
+            json.dump(self._converter.unstructure(self._checkpoint), checkpoint_file)
+            checkpoint_file.flush()
+            os.fsync(checkpoint_file.fileno())
+
+        os.replace(tmp_path, self._checkpoint_path)
+
+    def _init_ck_params(self):
+        # Initialize vocab
+        vocab = {
+            i: tok
+            for i, tok in enumerate(
+                [bytes([i]) for i in range(256)]
+                + [
+                    tok.encode("utf-8")
+                    for tok in self._checkpoint.hyper_params.special_tokens
+                ]
+            )
+        }
+        merges: list[tuple[bytes, bytes]] = []
+        pretoken_counts = BpeTokenizerTrainer._get_initial_pretoken_counts(
+            self._data_path, self._checkpoint.hyper_params
+        )
+
+        self._checkpoint.params = BpeCheckpointParams(
+            vocab=vocab, merges=merges, pretoken_counts=pretoken_counts
+        )
+
+    @staticmethod
+    def _get_initial_pretoken_counts(
+        data_path: Path, hyper_params: BpeHyperparameters
+    ) -> dict[tuple[TokenId, ...], int]:
         boundaries = BpeTokenizerTrainer._find_chunk_boundaries(
-            path, 2**21, b"<|endoftext|>"
+            data_path,
+            2**21,
+            hyper_params.chunk_delimiter,  # b"<|endoftext|>"
         )
         inputs = map(
             lambda bounds: PreTokenizerChunkInput(
-                path, bounds[0], bounds[1], special_tokens
+                data_path,
+                bounds[0],
+                bounds[1],
+                hyper_params.special_tokens,
             ),
             zip(boundaries[:-1], boundaries[1:]),
         )
 
-        with Pool() as pool:
-            result = pool.map(BpeTokenizerTrainer._get_chunk_pre_token_counts, inputs)
-
         total = dict()
 
-        for chunk_counts in result:
-            for pretok, count in chunk_counts.items():
-                total[pretok] = total.get(pretok, 0) + count
-        self._pre_token_counts = total
+        with Pool() as pool:
+            partial_results = pool.imap_unordered(
+                BpeTokenizerTrainer._get_chunk_pre_token_counts, inputs
+            )
+
+            for partial in partial_results:
+                for pretok, count in partial.items():
+                    total[pretok] = total.get(pretok, 0) + count
+
+        return total
 
     @staticmethod
     def _find_chunk_boundaries(
@@ -148,8 +293,9 @@ class BpeTokenizerTrainer:
     def _initial_tokenize_text(self, text_utf8: bytes) -> list[TokenId]:
         return [c for c in text_utf8]
 
+    @staticmethod
     def _initial_pair_counts(
-        self, pretoken_counts: dict[tuple[TokenId, ...], int]
+        pretoken_counts: dict[tuple[TokenId, ...], int],
     ) -> dict[tuple[TokenId, TokenId], int]:
         pair_counts = dict()
         for pretok, count in pretoken_counts.items():
@@ -170,7 +316,7 @@ class BpeTokenizerTrainer:
                 freq == best_freq
                 and (
                     best_pair is None
-                    or compare_tok_pair(pair, best_pair, self.vocab) > 0
+                    or compare_tok_pair(pair, best_pair, self._ck_params().vocab) > 0
                 )
             ):
                 best_pair = pair
@@ -181,19 +327,20 @@ class BpeTokenizerTrainer:
         return best_pair
 
     def _step_add_pair_to_vocab(self, pair: tuple[TokenId, TokenId]):
-        self.merges.append((self.vocab[pair[0]], self.vocab[pair[1]]))
-        new_tok = self.vocab[pair[0]] + self.vocab[pair[1]]
-        new_tok_id = len(self.vocab)
-        self.vocab[new_tok_id] = new_tok
+        vocab = self._ck_params().vocab
+        pretoken_counts = self._ck_params().pretoken_counts
+
+        self._ck_params().merges.append((vocab[pair[0]], vocab[pair[1]]))
+        new_tok = vocab[pair[0]] + vocab[pair[1]]
+        new_tok_id = len(vocab)
+        vocab[new_tok_id] = new_tok
 
         # Update tokenized text and pair counts
-        logger.debug(
-            f"Replacing token {new_tok} in {len(self._pre_token_counts)} pre-tokens"
-        )
+        logger.debug(f"Replacing token {new_tok} in {len(pretoken_counts)} pre-tokens")
 
         changes = []
 
-        for old_pretok, pretok_count in self._pre_token_counts.items():
+        for old_pretok, pretok_count in pretoken_counts.items():
             pretok_joins = None
             i = 0
             while i < len(old_pretok) - 1:
@@ -246,8 +393,12 @@ class BpeTokenizerTrainer:
         self._pair_counts.pop(pair)
 
         for old_pretok, new_pretok in changes:
-            count = self._pre_token_counts.pop(old_pretok)
-            self._pre_token_counts[new_pretok] = count
+            count = pretoken_counts.pop(old_pretok)
+            pretoken_counts[new_pretok] = count
+
+    def _ck_params(self) -> BpeCheckpointParams:
+        assert self._checkpoint.params is not None
+        return self._checkpoint.params
 
 
 def compare_tok_pair(
@@ -270,7 +421,7 @@ def compare_tok_pair(
             return 0
 
 
-def byte_encoder(val: bytes) -> str:
+def unstructure_bytes(val: bytes) -> str:
     try:
         val.decode("utf-8")
         return (b"utf8:" + val).decode("utf-8")
@@ -278,7 +429,7 @@ def byte_encoder(val: bytes) -> str:
         return (b"b64:" + base64.b64encode(val)).decode("ascii")
 
 
-def byte_decoder(val: str) -> bytes:
+def structure_bytes(val: str) -> bytes:
     if val.startswith("utf8:"):
         trimmed = val.removeprefix("utf8:")
         return trimmed.encode("utf-8")
@@ -289,23 +440,47 @@ def byte_decoder(val: str) -> bytes:
         raise ValueError("`bytes` encoding not recognized")
 
 
+def unstructure_pretok_counts(
+    val: dict[tuple[TokenId, ...], int],
+) -> list[tuple[tuple[TokenId, ...], int]]:
+    return [(key, value) for key, value in val.items()]
+
+
+def structure_pretok_counts(
+    val: list[tuple[tuple[TokenId, ...], int]],
+    _,
+) -> dict[tuple[TokenId, ...], int]:
+    return {tuple(key): value for key, value in val}
+
+
+@contextmanager
+def delay_keyboard_interrupt():
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
+def training_run(path: str, max_vocab_size: int):
+    file_path = Path(path)
+    save_path = Path(f"tokenizers/final/{file_path.name}.tok.json")
+    checkpoint_path = Path(f"tokenizers/checkpoints/{file_path.name}.ck.json")
+
+    tokenizer_trainer = BpeTokenizerTrainer(
+        data_path=file_path,
+        checkpoint_path=checkpoint_path,
+        hyper_params=BpeHyperparameters(
+            max_vocab_size=max_vocab_size,
+            special_tokens=["<|endoftext|>"],
+            chunk_delimiter=b"<|endoftext|>",
+        ),
+    )
+    tokenizer_trainer.train()
+
+
 def test_entrypoint():
     logging.basicConfig(level=logging.INFO)
-    tokenizer_trainer = BpeTokenizerTrainer()
 
-    # file_path = Path("data/TinyStoriesV2-GPT4-train.txt")
-    # tokenizer = tokenizer_trainer.train(file_path, 10000, ["<|endoftext|>"])
-
-    file_path = Path("data/owt_train.txt")
-    tokenizer = tokenizer_trainer.train(file_path, 32000, ["<|endoftext|>"])
-
-    converter = cattrs.Converter()
-    converter.register_unstructure_hook(bytes, byte_encoder)
-    converter.register_structure_hook(bytes, lambda val, _: byte_decoder(val))
-
-    save_path = f"tokenizers/{file_path.name}.json"
-
-    with open(save_path, "w") as f:
-        json.dump(converter.unstructure(tokenizer), f)
-
-    logger.info(f"Saved tokenizer file at {save_path}")
+    training_run("data/owt_train.txt", 32000)
+    # training_run("data/TinyStoriesV2-GPT4-train.txt", 10000)

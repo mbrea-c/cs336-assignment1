@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from cs336_basics.train_bpe import BpeTokenizerTrainer
+from cs336_basics.train_bpe import BpeTokenizerTrainer, BpeHyperparameters
 
 import os
 from collections.abc import Iterable
@@ -593,8 +593,15 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    tokenizer = BpeTokenizerTrainer()
+    tokenizer = BpeTokenizerTrainer(
+        data_path=Path(input_path),
+        checkpoint_path=None,
+        hyper_params=BpeHyperparameters(
+            max_vocab_size=vocab_size,
+            special_tokens=special_tokens,
+            chunk_delimiter=b"<|endoftext|>",
+        ),
+    )
+    tokenizer.train()
 
-    tokenizer.train(Path(input_path), vocab_size, special_tokens)
-
-    return tokenizer.vocab, tokenizer.merges
+    return tokenizer._ck_params().vocab, tokenizer._ck_params().merges
