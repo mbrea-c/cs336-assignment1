@@ -1,3 +1,11 @@
+from cs336_basics.tokenizer.bpe import BpeTokenizer
+from cs336_basics.utils import (
+    unstructure_bytes,
+    structure_bytes,
+    structure_tuple_dict,
+    unstructure_tuple_dict,
+)
+from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters
 import signal
 from contextlib import contextmanager
 from cattr.gen import make_dict_structure_fn, override, make_dict_unstructure_fn
@@ -11,7 +19,6 @@ import os
 from multiprocessing.pool import Pool
 from pathlib import Path
 from cs336_basics.domain import TokenId
-from cs336_basics.text import TokenizedText, TextCoords
 from collections import deque
 import multiprocessing
 import logging
@@ -19,27 +26,6 @@ import pprint
 import regex as re
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PreTokenizerChunkInput:
-    path: Path
-    start: int
-    end: int
-    special_tokens: list[str]
-
-
-@dataclass
-class BpeTokenizer:
-    vocab: dict[int, bytes]
-    merges: list[tuple[bytes, bytes]]
-
-
-@dataclass
-class BpeHyperparameters:
-    max_vocab_size: int
-    special_tokens: list[str]
-    chunk_delimiter: bytes
 
 
 @dataclass
@@ -54,6 +40,14 @@ class BpeCheckpoint:
     data_sha256_digest: str
     hyper_params: BpeHyperparameters
     params: BpeCheckpointParams | None
+
+
+@dataclass
+class _PreTokenizerChunkInput:
+    path: Path
+    start: int
+    end: int
+    special_tokens: list[str]
 
 
 class BpeTokenizerTrainer:
@@ -76,7 +70,7 @@ class BpeTokenizerTrainer:
             make_dict_structure_fn(
                 BpeCheckpointParams,
                 self._converter,
-                pretoken_counts=override(struct_hook=structure_pretok_counts),
+                pretoken_counts=override(struct_hook=structure_tuple_dict),
             ),
         )
         self._converter.register_unstructure_hook(
@@ -84,7 +78,7 @@ class BpeTokenizerTrainer:
             make_dict_unstructure_fn(
                 BpeCheckpointParams,
                 self._converter,
-                pretoken_counts=override(unstruct_hook=unstructure_pretok_counts),
+                pretoken_counts=override(unstruct_hook=unstructure_tuple_dict),
             ),
         )
 
@@ -172,6 +166,14 @@ class BpeTokenizerTrainer:
             self._save_checkpoint_atomic()
         logger.info("Done")
 
+    def tokenizer(self) -> BpeTokenizer:
+        return BpeTokenizer(
+            vocab=self._ck_params().vocab,
+            merges=self._ck_params().merges,
+            data_sha256_digest=self._checkpoint.data_sha256_digest,
+            hyper_params=self._checkpoint.hyper_params,
+        )
+
     def _save_checkpoint_atomic(self):
         if self._checkpoint_path is None:
             return
@@ -215,7 +217,7 @@ class BpeTokenizerTrainer:
             hyper_params.chunk_delimiter,  # b"<|endoftext|>"
         )
         inputs = map(
-            lambda bounds: PreTokenizerChunkInput(
+            lambda bounds: _PreTokenizerChunkInput(
                 data_path,
                 bounds[0],
                 bounds[1],
@@ -270,7 +272,7 @@ class BpeTokenizerTrainer:
 
     @staticmethod
     def _get_chunk_pre_token_counts(
-        input: PreTokenizerChunkInput,
+        input: _PreTokenizerChunkInput,
     ) -> dict[tuple[TokenId, ...], int]:
         path = input.path
         boundaries = (input.start, input.end)
@@ -421,38 +423,6 @@ def compare_tok_pair(
             return 0
 
 
-def unstructure_bytes(val: bytes) -> str:
-    try:
-        val.decode("utf-8")
-        return (b"utf8:" + val).decode("utf-8")
-    except:
-        return (b"b64:" + base64.b64encode(val)).decode("ascii")
-
-
-def structure_bytes(val: str) -> bytes:
-    if val.startswith("utf8:"):
-        trimmed = val.removeprefix("utf8:")
-        return trimmed.encode("utf-8")
-    elif val.startswith("b64:"):
-        trimmed = val.removeprefix("b64:")
-        return base64.b64decode(trimmed)
-    else:
-        raise ValueError("`bytes` encoding not recognized")
-
-
-def unstructure_pretok_counts(
-    val: dict[tuple[TokenId, ...], int],
-) -> list[tuple[tuple[TokenId, ...], int]]:
-    return [(key, value) for key, value in val.items()]
-
-
-def structure_pretok_counts(
-    val: list[tuple[tuple[TokenId, ...], int]],
-    _,
-) -> dict[tuple[TokenId, ...], int]:
-    return {tuple(key): value for key, value in val}
-
-
 @contextmanager
 def delay_keyboard_interrupt():
     old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -477,6 +447,7 @@ def training_run(path: str, max_vocab_size: int):
         ),
     )
     tokenizer_trainer.train()
+    tokenizer_trainer.tokenizer().save_to_file(save_path)
 
 
 def test_entrypoint():

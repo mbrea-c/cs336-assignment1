@@ -1,6 +1,7 @@
 from __future__ import annotations
+from cs336_basics.tokenizer.bpe_train import BpeTokenizerTrainer
+from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters
 from pathlib import Path
-from cs336_basics.train_bpe import BpeTokenizerTrainer, BpeHyperparameters
 
 import os
 from collections.abc import Iterable

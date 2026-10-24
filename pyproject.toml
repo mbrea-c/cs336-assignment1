@@ -27,7 +27,7 @@ cuda = ["torch~=2.11.0"]
 rocm = ["torch~=2.11.0", "triton-rocm>=3.6.0; sys_platform == 'linux'"]
 
 [project.scripts]
-test-bpe = "cs336_basics.train_bpe:test_entrypoint"
+train-bpe = "cs336_basics.tokenizer.bpe_train:test_entrypoint"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<0.13.0"]
