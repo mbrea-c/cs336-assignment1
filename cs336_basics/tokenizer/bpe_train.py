@@ -5,7 +5,7 @@ from cs336_basics.utils import (
     structure_tuple_dict,
     unstructure_tuple_dict,
 )
-from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters
+from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters, PRETOK_PATTERN
 import signal
 from contextlib import contextmanager
 from cattr.gen import make_dict_structure_fn, override, make_dict_unstructure_fn
@@ -51,8 +51,6 @@ class _PreTokenizerChunkInput:
 
 
 class BpeTokenizerTrainer:
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-
     def __init__(
         self,
         data_path: Path,
@@ -285,7 +283,7 @@ class BpeTokenizerTrainer:
             "|".join([re.escape(stok, special_only=False) for stok in special_tokens]),
             text,
         ):
-            for match in re.finditer(BpeTokenizerTrainer.PAT, subdoc):
+            for match in re.finditer(PRETOK_PATTERN, subdoc):
                 match_text: str = match.group(0)
                 match_text_utf8 = match_text.encode("utf-8")
                 counts[match_text_utf8] = counts.get(match_text_utf8, 0) + 1

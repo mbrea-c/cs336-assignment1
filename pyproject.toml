@@ -28,6 +28,7 @@ rocm = ["torch~=2.11.0", "triton-rocm>=3.6.0; sys_platform == 'linux'"]
 
 [project.scripts]
 train-bpe = "cs336_basics.tokenizer.bpe_train:test_entrypoint"
+eval-bpe = "cs336_basics.tokenizer.bpe:test_entrypoint"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<0.13.0"]
