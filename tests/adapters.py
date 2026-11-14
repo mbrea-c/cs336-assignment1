@@ -1,4 +1,5 @@
 from __future__ import annotations
+from cs336_basics.tokenizer.bpe import BpeTokenizerData, BpeTokenizer
 from cs336_basics.tokenizer.bpe_train import BpeTokenizerTrainer
 from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters
 from pathlib import Path
@@ -564,7 +565,18 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    data = BpeTokenizerData(
+        vocab=vocab,
+        merges=merges,
+        data_sha256_digest="",
+        hyper_params=BpeHyperparameters(
+            max_vocab_size=99999999999,
+            special_tokens=special_tokens if special_tokens is not None else [],
+            chunk_delimiter=b"",
+        ),
+    )
+    tokenizer = BpeTokenizer(data)
+    return tokenizer
 
 
 def run_train_bpe(

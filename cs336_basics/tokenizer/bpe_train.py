@@ -1,4 +1,4 @@
-from cs336_basics.tokenizer.bpe import BpeTokenizer
+from cs336_basics.tokenizer.bpe import BpeTokenizerData
 from cs336_basics.utils import (
     unstructure_bytes,
     structure_bytes,
@@ -164,8 +164,8 @@ class BpeTokenizerTrainer:
             self._save_checkpoint_atomic()
         logger.info("Done")
 
-    def tokenizer(self) -> BpeTokenizer:
-        return BpeTokenizer(
+    def tokenizer(self) -> BpeTokenizerData:
+        return BpeTokenizerData(
             vocab=self._ck_params().vocab,
             merges=self._ck_params().merges,
             data_sha256_digest=self._checkpoint.data_sha256_digest,

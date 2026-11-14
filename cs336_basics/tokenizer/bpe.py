@@ -1,7 +1,9 @@
+import itertools
+import re
 import logging
 from cs336_basics.domain import TokenId
-import regex as re
-from typing import Self
+import regex as regex
+from typing import Self, Iterable, Iterator
 import json
 from pathlib import Path
 from cattr.gen import override
@@ -13,7 +15,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class BpeTokenizer:
+class BpeTokenizerData:
     vocab: dict[int, bytes]
     merges: list[tuple[bytes, bytes]]
 
@@ -21,17 +23,17 @@ class BpeTokenizer:
     hyper_params: BpeHyperparameters
 
     @staticmethod
-    def from_file(tokenizer_path: Path) -> "BpeTokenizer":
+    def from_file(tokenizer_path: Path) -> "BpeTokenizerData":
         with open(tokenizer_path, "r") as tokenizer_file:
-            tokenizer = BpeTokenizer._converter().structure(
-                json.load(tokenizer_file), BpeTokenizer
+            tokenizer = BpeTokenizerData._converter().structure(
+                json.load(tokenizer_file), BpeTokenizerData
             )
 
         return tokenizer
 
     def save_to_file(self, path: Path):
         with open(path, "w") as file:
-            json.dump(BpeTokenizer._converter().unstructure(self), file)
+            json.dump(BpeTokenizerData._converter().unstructure(self), file)
 
     @staticmethod
     def _converter() -> cattrs.Converter:
@@ -42,41 +44,123 @@ class BpeTokenizer:
 
         return converter
 
+
+@dataclass
+class _SpecialToken:
+    token: TokenId
+
+
+@dataclass
+class _SubDocument:
+    text: str
+
+
+class BpeTokenizer:
+    def __init__(self, data: BpeTokenizerData):
+        self.data = data
+        self._reverse_vocab = {val: token for token, val in self.data.vocab.items()}
+        self._tok_merges = [
+            (
+                self._reverse_vocab[left_val],
+                self._reverse_vocab[right_val],
+                self._reverse_vocab[left_val + right_val],
+            )
+            for left_val, right_val in self.data.merges
+        ]
+
     def encode(self, text: str) -> list[TokenId]:
-        pretoks = []
 
-        for subdoc in re.split(
-            "|".join(
-                [
-                    re.escape(stok, special_only=False)
-                    for stok in self.hyper_params.special_tokens
+        special_tok_pattern = "|".join(
+            [
+                regex.escape(stok, special_only=False)
+                for stok in self.data.hyper_params.special_tokens
+            ]
+        )
+
+        subdoc_start = 0
+
+        sequence = []
+
+        for special_tok_match in regex.finditer(special_tok_pattern, text):
+            subdoc_end: int = special_tok_match.start()
+            if subdoc_end - subdoc_start > 0:
+                sequence.append(_SubDocument(text[subdoc_start:subdoc_end]))
+            speciak_tok = special_tok_match.group()
+            special_tok_utf8 = speciak_tok.encode("utf-8")
+            print("special_tok: ", speciak_tok, special_tok_utf8)
+            sequence.append(
+                _SpecialToken(
+                    self._reverse_vocab[special_tok_match.group().encode("utf-8")]
+                )
+            )
+            subdoc_start = special_tok_match.end()
+
+        if len(text) - 1 - subdoc_start > 0:
+            sequence.append(_SubDocument(text[subdoc_start:]))
+
+        encoded_toks = []
+
+        for item in sequence:
+            if isinstance(item, _SubDocument):
+                pretok_vals: list[list[bytes]] = []
+                for match in regex.finditer(PRETOK_PATTERN, item.text):
+                    match_text: str = match.group(0)
+                    match_text_utf8 = match_text.encode("utf-8")
+                    pretok_vals.append([bytes([c]) for c in match_text_utf8])
+                pretoks = [
+                    [self._reverse_vocab[val] for val in pretok]
+                    for pretok in pretok_vals
                 ]
-            ),
-            text,
-        ):
-            for match in re.finditer(PRETOK_PATTERN, subdoc):
-                match_text: str = match.group(0)
-                match_text_utf8 = match_text.encode("utf-8")
-                pretoks.append([bytes([c]) for c in match_text_utf8])
+                for left, right, new in self._tok_merges:
+                    for pretok in pretoks:
+                        i = 0
+                        while i < len(pretok) - 1:
+                            if pretok[i] == left and pretok[i + 1] == right:
+                                # apply merge
+                                pretok.pop(i + 1)
+                                pretok.pop(i)
+                                pretok.insert(i, new)
+                            i += 1
+                for pretok in pretoks:
+                    for tok in pretok:
+                        encoded_toks.append(tok)
+            else:
+                encoded_toks.append(item.token)
 
-        for left, right in self.merges:
-            for pretok in pretoks:
-                i = 0
-                while i < len(pretok) - 1:
-                    if pretok[i] == left and pretok[i + 1] == right:
-                        # apply merge
-                        pretok.pop(i + 1)
-                        pretok.pop(i)
-                        pretok.insert(i, left + right)
-                    i += 1
+        return encoded_toks
 
-        return pretoks
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[TokenId]:
+        for text in iterable:
+            for tok in self.encode(text):
+                yield tok
+
+    def decode(self, ids: list[TokenId]) -> str:
+        return b"".join([self.data.vocab[tok] for tok in ids]).decode(
+            "utf-8", errors="replace"
+        )
 
 
 def test_entrypoint():
+    # text = """
+    # The cat ate some stuff. He didn't really like it too much I fear. He might have just figured out that there was some medicine mixed in.<|endoftext|>
+    # A short one.<|endoftext|>
+    # Yet another story. In this one Sarits is reading a book, and she's very focused. I wonder what's happening in the book?<|endoftext|>
+    # """
+    text = ""
     logging.basicConfig(level=logging.INFO)
 
-    tokenizer = BpeTokenizer.from_file(Path("tokenizers/final/owt_train.txt.tok.json"))
-    print(tokenizer.encode("the cat ate"))
+    tokenizer_data = BpeTokenizerData.from_file(
+        Path("tokenizers/final/owt_train.txt.tok.json")
+    )
+    tokenizer = BpeTokenizer(tokenizer_data)
+
+    encoded = tokenizer.encode(text)
+
+    print(encoded)
+    print(tokenizer.decode(tokenizer.encode(text)))
+
+    print(
+        f"Text length {len(text.encode("utf-8"))}, encoded length {len(encoded)}, compression ratio {len(encoded) / len(text.encode("utf-8"))}"
+    )
 
     # training_run("data/TinyStoriesV2-GPT4-train.txt", 10000)
