@@ -2,7 +2,7 @@ import itertools
 import re
 import logging
 from cs336_basics.domain import TokenId
-import regex as regex
+import regex
 from typing import Self, Iterable, Iterator
 import json
 from pathlib import Path
@@ -69,39 +69,47 @@ class BpeTokenizer:
         ]
 
     def encode(self, text: str) -> list[TokenId]:
-
-        special_tok_pattern = "|".join(
-            [
-                regex.escape(stok, special_only=False)
-                for stok in self.data.hyper_params.special_tokens
-            ]
-        )
-
-        subdoc_start = 0
+        # print("Token 198: ", self.data.vocab[198].__repr__())
+        # print("Token 50256: ", self.data.vocab[50256].__repr__())
+        # print("Special tokens: ", self.data.hyper_params.special_tokens)
 
         sequence = []
 
-        for special_tok_match in regex.finditer(special_tok_pattern, text):
-            subdoc_end: int = special_tok_match.start()
-            if subdoc_end - subdoc_start > 0:
-                sequence.append(_SubDocument(text[subdoc_start:subdoc_end]))
-            speciak_tok = special_tok_match.group()
-            special_tok_utf8 = speciak_tok.encode("utf-8")
-            print("special_tok: ", speciak_tok, special_tok_utf8)
-            sequence.append(
-                _SpecialToken(
-                    self._reverse_vocab[special_tok_match.group().encode("utf-8")]
-                )
+        if len(self.data.hyper_params.special_tokens) > 0:
+            special_tok_pattern = "|".join(
+                [
+                    regex.escape(stok, special_only=False)
+                    for stok in self.data.hyper_params.special_tokens
+                ]
             )
-            subdoc_start = special_tok_match.end()
 
-        if len(text) - 1 - subdoc_start > 0:
-            sequence.append(_SubDocument(text[subdoc_start:]))
+            subdoc_start = 0
+
+            for special_tok_match in regex.finditer(
+                special_tok_pattern, text, flags=regex.POSIX
+            ):
+                subdoc_end: int = special_tok_match.start()
+                if subdoc_end - subdoc_start > 0:
+                    sequence.append(_SubDocument(text[subdoc_start:subdoc_end]))
+                # print("special_tok: ", speciak_tok, special_tok_utf8)
+                sequence.append(
+                    _SpecialToken(
+                        self._reverse_vocab[special_tok_match.group().encode("utf-8")]
+                    )
+                )
+                subdoc_start = special_tok_match.end()
+            if len(text) - subdoc_start > 0:
+                sequence.append(_SubDocument(text[subdoc_start:]))
+        else:
+            sequence.append(_SubDocument(text[:]))
 
         encoded_toks = []
 
+        # print("last item in sequence is: ", type(sequence[-1]))
+
         for item in sequence:
             if isinstance(item, _SubDocument):
+                # print("last char: ", item.text[-1].__repr__())
                 pretok_vals: list[list[bytes]] = []
                 for match in regex.finditer(PRETOK_PATTERN, item.text):
                     match_text: str = match.group(0)
@@ -111,6 +119,7 @@ class BpeTokenizer:
                     [self._reverse_vocab[val] for val in pretok]
                     for pretok in pretok_vals
                 ]
+                # print("last pretok: ", pretoks[-1])
                 for left, right, new in self._tok_merges:
                     for pretok in pretoks:
                         i = 0
@@ -127,6 +136,7 @@ class BpeTokenizer:
             else:
                 encoded_toks.append(item.token)
 
+        # print(encoded_toks[-1])
         return encoded_toks
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[TokenId]:
@@ -153,14 +163,15 @@ def test_entrypoint():
         Path("tokenizers/final/owt_train.txt.tok.json")
     )
     tokenizer = BpeTokenizer(tokenizer_data)
+    tokenizer.data.hyper_params.special_tokens = []
 
     encoded = tokenizer.encode(text)
 
     print(encoded)
-    print(tokenizer.decode(tokenizer.encode(text)))
+    print(tokenizer.decode(tokenizer.encode(text)).__repr__())
 
     print(
-        f"Text length {len(text.encode("utf-8"))}, encoded length {len(encoded)}, compression ratio {len(encoded) / len(text.encode("utf-8"))}"
+        f"Text length {len(text.encode("utf-8"))}, encoded length {len(encoded)}, compression ratio {len(encoded) / len(text.encode("utf-8")) if len(text.encode("utf-8")) > 0 else 'n/a'}"
     )
 
     # training_run("data/TinyStoriesV2-GPT4-train.txt", 10000)
