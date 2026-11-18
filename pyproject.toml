@@ -19,6 +19,7 @@ dependencies = [
     "ty>=0.0.26",
     "ruff>=0.15.8",
     "cattrs>=26.2.1",
+    "toolz>=1.2.0",
 ]
 
 [project.optional-dependencies]

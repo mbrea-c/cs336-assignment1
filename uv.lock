@@ -132,6 +132,7 @@ dependencies = [
     { name = "regex" },
     { name = "ruff" },
     { name = "tiktoken" },
+    { name = "toolz" },
     { name = "tqdm" },
     { name = "ty" },
     { name = "wandb" },
@@ -163,6 +164,7 @@ requires-dist = [
     { name = "regex", specifier = ">=2026.3.32" },
     { name = "ruff", specifier = ">=0.15.8" },
     { name = "tiktoken", specifier = ">=0.12.0" },
+    { name = "toolz", specifier = ">=1.2.0" },
     { name = "torch", marker = "extra == 'cpu'", specifier = "~=2.11.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "cs336-basics", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = "~=2.11.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "cs336-basics", extra = "cuda" } },
     { name = "torch", marker = "extra == 'rocm'", specifier = "~=2.11.0", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "cs336-basics", extra = "rocm" } },
@@ -251,16 +253,16 @@ wheels = [
 
 [[package]]
 name = "einx"
-version = "0.4.2"
+version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozendict" },
     { name = "numpy" },
     { name = "sympy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/b3/2b0acbde4f763b72f65da58cea54f35386f537569c4c39f3d37de1c03710/einx-0.4.2.tar.gz", hash = "sha256:9aeea7053a4f683235e81b62383069085cc919a012748c8575f3557455377e11", size = 114546, upload-time = "2026-03-14T07:39:06.6Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/96/df2cfa7418b175dddcf30a88711d01b79a32c3ac4d64b379ed89a3de2c08/einx-0.4.3.tar.gz", hash = "sha256:be7d81ea1908b9f00e4a467840998fc483c33aa32aaaaa3ada6c8386f693edf9", size = 120087, upload-time = "2026-04-01T09:50:41.473Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/97/7afa0d833cae4d8e651b8265b7c95613199d9749a4976149b5fd66052a06/einx-0.4.2-py3-none-any.whl", hash = "sha256:c3d01878ffe34f2e038a14b98f82b4b47bba32ee2f127618ab31851e439ba2f0", size = 139917, upload-time = "2026-03-14T07:39:05.413Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/28/6768d342b2b888f9facdddbd430daf015cab936e2598281ab436b1be1b4a/einx-0.4.3-py3-none-any.whl", hash = "sha256:47ce54a0144f6dffcfacdd8fe2cc9e2e5e6485dda2471330ab75ee747dd22f39", size = 163766, upload-time = "2026-04-01T09:50:40.165Z" },
 ]
 
 [[package]]
@@ -973,6 +975,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/22/1f/ae535223a8c4ef4c0c1192e3f9b82da660be9eb66b9279e95c99288e9dab/tiktoken-0.12.0-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:04f0e6a985d95913cabc96a741c5ffec525a2c72e9df086ff17ebe35985c800e", size = 1194451, upload-time = "2025-10-06T20:22:15.545Z" },
     { url = "https://files.pythonhosted.org/packages/78/a7/f8ead382fce0243cb625c4f266e66c27f65ae65ee9e77f59ea1653b6d730/tiktoken-0.12.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:0ee8f9ae00c41770b5f9b0bb1235474768884ae157de3beb5439ca0fd70f3e25", size = 1253794, upload-time = "2025-10-06T20:22:16.624Z" },
     { url = "https://files.pythonhosted.org/packages/93/e0/6cc82a562bc6365785a3ff0af27a2a092d57c47d7a81d9e2295d8c36f011/tiktoken-0.12.0-cp313-cp313t-win_amd64.whl", hash = "sha256:dc2dd125a62cb2b3d858484d6c614d136b5b848976794edfb63688d539b8b93f", size = 878777, upload-time = "2025-10-06T20:22:18.036Z" },
+]
+
+[[package]]
+name = "toolz"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/6f/ae20c212a07aa2d156c787383d8088a5e045ee39628661edb190c97e1659/toolz-1.2.0.tar.gz", hash = "sha256:9667a038e9d6ecba37995e26cb2f59ec6420b6ad8dd9677de59db9b956b08490", size = 55442, upload-time = "2026-10-07T04:16:25.639Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/17/4c8beb6c8c4176c6bf143bfd7e1e4dd6719b00ced90738c7ac471b71c1df/toolz-1.2.0-py3-none-any.whl", hash = "sha256:890f820b1cb8152785aaf9386d8707770110809035800985ca65cb24ce1120ef", size = 60789, upload-time = "2026-10-07T04:16:24.173Z" },
 ]
 
 [[package]]

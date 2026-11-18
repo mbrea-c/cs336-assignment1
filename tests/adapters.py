@@ -1,4 +1,7 @@
 from __future__ import annotations
+from cs336_basics.model.rms_norm import RmsNorm
+from cs336_basics.model.embedding import Embedding
+from cs336_basics.model.linear import Linear
 from cs336_basics.tokenizer.bpe import BpeTokenizerData, BpeTokenizer
 from cs336_basics.tokenizer.bpe_train import BpeTokenizerTrainer
 from cs336_basics.tokenizer.bpe_domain import BpeHyperparameters
@@ -33,7 +36,10 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    raise NotImplementedError
+    model = Linear(in_features=d_in, out_features=d_out)
+    model.weights.data = weights
+
+    return model.forward(in_features)
 
 
 def run_embedding(
@@ -54,8 +60,10 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    model = Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
+    model.weights.data = weights
 
-    raise NotImplementedError
+    return model.forward(token_ids)
 
 
 def run_swiglu(
@@ -382,7 +390,9 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    model = RmsNorm(d_model=d_model, eps=eps)
+    model.gain.data = weights
+    return model.forward(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
